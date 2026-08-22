@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin - Gsync</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; }
+  .login-box { max-width: 320px; margin: 100px auto; }
+  input { width: 100%; padding: 10px; margin: 8px 0; box-sizing: border-box; border: 1px solid #ccc; border-radius: 6px; }
+  button { padding: 8px 14px; background: #111; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+  .error { color: #c0392b; font-size: 14px; min-height: 20px; }
+
+  .stats { display: flex; gap: 16px; margin: 20px 0; flex-wrap: wrap; }
+  .stat-card { border: 1px solid #eee; border-radius: 10px; padding: 14px 20px; min-width: 140px; }
+  .stat-num { font-size: 26px; font-weight: 700; }
+  .stat-label { color: #666; font-size: 13px; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 14px; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
+  th { color: #666; font-weight: 600; }
+  .badge { display: inline-block; padding: 3px 8px; border-radius: 20px; font-size: 11px; }
+  .on { background: #e6f7e9; color: #1e7e34; }
+  .off { background: #fdecea; color: #c0392b; }
+  .toolbar { display: flex; gap: 10px; align-items: center; margin-top: 20px; }
+  .toolbar input { width: 260px; margin: 0; }
+  .del-btn { background: #fdecea; color: #c0392b; padding: 4px 10px; font-size: 12px; }
+  .pager { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
+</style>
+</head>
+<body>
+
+<div class="login-box" id="loginBox">
+  <h2>Admin Login</h2>
+  <input id="pw" type="password" placeholder="Admin password" />
+  <button onclick="login()" style="width:100%">Login</button>
+  <div class="error" id="loginErr"></div>
+</div>
+
+<div id="panel" style="display:none">
+  <div style="display:flex; justify-content:space-between; align-items:center">
+    <h2>Admin Panel</h2>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="toolbar">
+    <input id="search" placeholder="Search by phone / name / email" oninput="debouncedLoad()" />
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Phone</th><th>Name</th><th>Google Email</th><th>Session</th>
+        <th>Saved to</th><th>Saved by</th><th>Connected</th><th></th>
+      </tr>
+    </thead>
+    <tbody id="userRows"></tbody>
+  </table>
+
+  <div class="pager">
+    <button onclick="prevPage()">Prev</button>
+    <span id="pageInfo"></span>
+    <button onclick="nextPage()">Next</button>
+  </div>
+</div>
+
+<script>
+let page = 1;
+const limit = 20;
+let debounceTimer;
+
+async function login() {
+  const password = document.getElementById('pw').value;
+  const res = await fetch('/admin/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password })
+  });
+  const data = await res.json();
+  if (!res.ok) { document.getElementById('loginErr').textContent = data.error; return; }
+  document.getElementById('loginBox').style.display = 'none';
+  document.getElementById('panel').style.display = 'block';
+  loadOverview();
+  loadUsers();
+}
+
+async function logout() {
+  await fetch('/admin/logout', { method: 'POST' });
+  document.getElementById('panel').style.display = 'none';
+  document.getElementById('loginBox').style.display = 'block';
+}
+
+async function loadOverview() {
+  const res = await fetch('/admin/api/overview');
+  if (res.status === 401) return logout();
+  const d = await res.json();
+  document.getElementById('stats').innerHTML = `
+    <div class="stat-card"><div class="stat-num">${d.total_users}</div><div class="stat-label">Total users</div></div>
+    <div class="stat-card"><div class="stat-num">${d.connected_users}</div><div class="stat-label">Google connected</div></div>
+    <div class="stat-card"><div class="stat-num">${d.active_sessions}</div><div class="stat-label">Active bot sessions</div></div>
+    <div class="stat-card"><div class="stat-num">${d.total_contact_syncs}</div><div class="stat-label">Total contact syncs</div></div>
+  `;
+}
+
+function debouncedLoad() {
+  clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => { page = 1; loadUsers(); }, 300);
+}
+
+async function loadUsers() {
+  const search = document.getElementById('search').value.trim();
+  const res = await fetch(`/admin/api/users?search=${encodeURIComponent(search)}&page=${page}&limit=${limit}`);
+  if (res.status === 401) return logout();
+  const d = await res.json();
+
+  document.getElementById('userRows').innerHTML = d.users.map(u => `
+    <tr>
+      <td>${u.phone}</td>
+      <td>${u.name || '-'}</td>
+      <td>${u.google_email || '-'}</td>
+      <td><span class="badge ${u.session_active ? 'on' : 'off'}">${u.session_active ? 'Active' : 'Inactive'}</span></td>
+      <td>${u.saved_to_count}</td>
+      <td>${u.saved_by_count}</td>
+      <td>${u.connected_at ? new Date(u.connected_at).toLocaleDateString() : '-'}</td>
+      <td><button class="del-btn" onclick="removeUser('${u.phone}')">Delete</button></td>
+    </tr>
+  `).join('');
+
+  const totalPages = Math.max(1, Math.ceil(d.total / limit));
+  document.getElementById('pageInfo').textContent = `Page ${d.page} of ${totalPages} (${d.total} users)`;
+}
+
+async function removeUser(phone) {
+  if (!confirm(`Delete all data for ${phone}?`)) return;
+  await fetch(`/admin/api/users/${phone}`, { method: 'DELETE' });
+  loadUsers();
+  loadOverview();
+}
+
+function prevPage() { if (page > 1) { page--; loadUsers(); } }
+function nextPage() { page++; loadUsers(); }
+</script>
+</body>
+</html>
